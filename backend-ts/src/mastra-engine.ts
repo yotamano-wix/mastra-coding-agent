@@ -6,13 +6,13 @@
 import { Agent } from "@mastra/core/agent";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { getSystemPrompt, getMatchedSkills, getArtDirectorPrompt } from "./prompts.js";
+import { getSystemPrompt, getMatchedSkills } from "./prompts.js";
 import { type HistoryMessage } from "./sessions.js";
 import * as fs from "./tools/filesystem.js";
 import { executePythonCode } from "./tools/sandbox.js";
 import { extractCodeBlocks } from "./utils.js";
 
-const DEFAULT_MODEL = "openai/gpt-5.2";
+const DEFAULT_MODEL = "openai/gpt-4o";
 const MAX_STEPS = 20;
 
 // ---------- Types ----------
@@ -29,28 +29,27 @@ export interface EngineResponse {
   files_changed: string[];
   tool_calls: ToolCallInfo[];
   skills_used: string[];
-  design_brief?: string;
-  preview_file?: string;
 }
 
 // ---------- Model resolution ----------
 
-/** Reasoning model patterns. */
 const OPENAI_REASONING_MODELS = ["o1", "o3", "o3-mini", "o4-mini"];
 const ANTHROPIC_THINKING_SUFFIX = "-thinking";
 
 interface ResolvedModel {
   modelId: string;
   isReasoning: boolean;
-  providerOptions?: Record<string, unknown>;
+  providerOptions?: Record<string, any>;
 }
 
-/** Convert a short model name into a Mastra-compatible "provider/model" string, detecting reasoning models. */
+/**
+ * Convert a short model name into a Mastra-compatible "provider/model" string,
+ * detecting reasoning models and enabling appropriate provider options.
+ */
 function resolveModel(modelId: string | null): ResolvedModel {
   const name = (modelId || "").toLowerCase();
   if (!name) return { modelId: DEFAULT_MODEL, isReasoning: false };
 
-  // Anthropic thinking mode: "claude-xxx-thinking" -> strip suffix, enable thinking
   if (name.endsWith(ANTHROPIC_THINKING_SUFFIX)) {
     const base = name.slice(0, -ANTHROPIC_THINKING_SUFFIX.length);
     return {
@@ -62,7 +61,6 @@ function resolveModel(modelId: string | null): ResolvedModel {
     };
   }
 
-  // OpenAI reasoning models (o1, o3, o3-mini, etc.)
   const isOpenAiReasoning = OPENAI_REASONING_MODELS.some(
     (m) => name === m || name === `openai/${m}`
   );
@@ -77,83 +75,10 @@ function resolveModel(modelId: string | null): ResolvedModel {
     };
   }
 
-  // Regular model
   if (name.includes("/")) return { modelId: name, isReasoning: false };
   if (name.startsWith("claude")) return { modelId: `anthropic/${name}`, isReasoning: false };
   if (name.startsWith("gemini")) return { modelId: `google/${name}`, isReasoning: false };
   return { modelId: `openai/${name}`, isReasoning: false };
-}
-
-// ---------- Art Director ----------
-
-const ART_DIRECTOR_MAX_STEPS = 8;
-
-/** Create read-only tools for the Art Director (no write/edit access). */
-function createArtDirectorTools(workspacePath: string) {
-  const root = workspacePath;
-  return {
-    list_files: createTool({
-      id: "list_files",
-      description:
-        "List files and directories at path (relative to workspace). Use recursive=True for full tree.",
-      inputSchema: z.object({
-        path: z.string().default("."),
-        recursive: z.boolean().default(false),
-      }),
-      execute: async (inputData) => {
-        try {
-          return await fs.listFiles(inputData.path, root, inputData.recursive);
-        } catch (e) {
-          return `Error: ${e instanceof Error ? e.message : e}`;
-        }
-      },
-    }),
-    read_file: createTool({
-      id: "read_file",
-      description:
-        "Read a file from the workspace. path is relative to the workspace root.",
-      inputSchema: z.object({ path: z.string().describe("Relative path to file") }),
-      execute: async (inputData) => {
-        try {
-          return await fs.readFile(inputData.path, root);
-        } catch (e) {
-          return `Error: ${e instanceof Error ? e.message : e}`;
-        }
-      },
-    }),
-  };
-}
-
-/**
- * Run the Art Director agent to produce a design brief.
- * The Art Director has read-only workspace access and returns a structured brief.
- */
-export async function runArtDirector(
-  request: string,
-  workspacePath: string,
-  model: string | null
-): Promise<string> {
-  const resolved = resolveModel(model);
-  const tools = createArtDirectorTools(workspacePath);
-  const prompt = getArtDirectorPrompt();
-
-  const agent = new Agent({
-    id: "chatooli-art-director",
-    name: "Chatooli Art Director",
-    instructions: prompt,
-    model: resolved.modelId,
-    tools,
-  });
-
-  const result = await agent.generate(
-    [{ role: "user" as const, content: request }],
-    {
-      maxSteps: ART_DIRECTOR_MAX_STEPS,
-      ...(resolved.providerOptions ? { providerOptions: resolved.providerOptions } : {}),
-    }
-  );
-
-  return result.text ?? "";
 }
 
 // ---------- Tools ----------
@@ -161,17 +86,11 @@ export async function runArtDirector(
 interface ToolContext {
   workspacePath: string;
   filesChanged: string[];
-  model: string | null;
-  /** The file currently shown in the preview iframe (sent by frontend). */
-  currentPreviewFile: string | null;
-  /** Set by set_preview tool — overrides which file the frontend should show. */
-  requestedPreviewFile: string | null;
 }
 
 function createMastraTools(ctx: ToolContext) {
   const root = ctx.workspacePath;
   const filesChanged = ctx.filesChanged;
-  const model = ctx.model;
   return {
     read_file: createTool({
       id: "read_file",
@@ -191,7 +110,7 @@ function createMastraTools(ctx: ToolContext) {
       description:
         "Create or overwrite a file in the workspace. path is relative; creates directories if needed. You must provide both path and content (the full file body).",
       inputSchema: z.object({
-        path: z.string().describe("Relative path to the file, e.g. index.html or src/sketch.js"),
+        path: z.string().describe("Relative path to the file, e.g. index.html or src/app.js"),
         content: z.string().default("").describe("The complete file content to write. Required."),
       }),
       execute: async (inputData) => {
@@ -292,61 +211,6 @@ function createMastraTools(ctx: ToolContext) {
         }
       },
     }),
-    consult_art_director: createTool({
-      id: "consult_art_director",
-      description:
-        "Consult the Art Director for creative direction on a new piece or major redesign. " +
-        "Use for new creative work, major visual changes, or when you need design guidance. " +
-        "Pass a clear description of what you need direction on, including relevant context " +
-        "about what exists and what the user wants. Returns a structured design brief.",
-      inputSchema: z.object({
-        request: z.string().describe(
-          "What you need the Art Director's input on. Include the user's request " +
-          "and any relevant context about the current workspace state."
-        ),
-      }),
-      execute: async (inputData) => {
-        try {
-          return await runArtDirector(inputData.request, root, model);
-        } catch (e) {
-          return `Art Director unavailable: ${e instanceof Error ? e.message : e}. Proceed with your best judgment.`;
-        }
-      },
-    }),
-    set_preview: createTool({
-      id: "set_preview",
-      description:
-        "Set which file to show in the preview iframe. Use after writing or editing files " +
-        "to control which HTML file the user sees. The path is relative to the workspace.",
-      inputSchema: z.object({
-        path: z.string().describe("Relative path to the file to preview, e.g. index.html or sketches/demo.html"),
-      }),
-      execute: async (inputData) => {
-        ctx.requestedPreviewFile = inputData.path;
-        return `Preview set to: ${inputData.path}`;
-      },
-    }),
-    get_preview_status: createTool({
-      id: "get_preview_status",
-      description:
-        "Get the current preview state: which file is shown in the preview iframe " +
-        "and which HTML files exist in the workspace. Use to understand what the user " +
-        "is currently looking at before making changes.",
-      inputSchema: z.object({}),
-      execute: async () => {
-        try {
-          const allFiles = await fs.globFiles("**/*.html", root);
-          const htmlFiles = allFiles.trim().split("\n").filter(Boolean);
-          const current = ctx.requestedPreviewFile ?? ctx.currentPreviewFile;
-          return JSON.stringify({
-            current_preview: current ?? "(none)",
-            html_files: htmlFiles,
-          });
-        } catch (e) {
-          return `Error: ${e instanceof Error ? e.message : e}`;
-        }
-      },
-    }),
   };
 }
 
@@ -368,8 +232,7 @@ async function buildAgent(
   message: string,
   workspacePath: string,
   model: string | null,
-  toolCtx: ToolContext,
-  designBrief?: string
+  toolCtx: ToolContext
 ) {
   const tools = createMastraTools(toolCtx);
   const resolved = resolveModel(model);
@@ -378,19 +241,11 @@ async function buildAgent(
 
   const parts = [systemPrompt];
   if (skillContext) parts.push(skillContext);
-  if (designBrief) {
-    parts.push(
-      "## Current Design Brief\n\n" +
-      "The Art Director has reviewed this request and produced the following brief. " +
-      "Follow this as your creative direction.\n\n" +
-      designBrief
-    );
-  }
   const fullInstructions = parts.join("\n\n");
 
   const agent = new Agent({
-    id: "chatooli-creative",
-    name: "Chatooli Creative",
+    id: "coding-agent",
+    name: "Coding Agent",
     instructions: fullInstructions,
     model: resolved.modelId,
     tools,
@@ -405,33 +260,16 @@ export async function runAgent(
   message: string,
   history: HistoryMessage[],
   workspacePath: string,
-  model: string | null,
-  currentPreviewFile?: string | null
+  model: string | null
 ): Promise<EngineResponse> {
   const toolCtx: ToolContext = {
     workspacePath,
     filesChanged: [],
-    model,
-    currentPreviewFile: currentPreviewFile ?? null,
-    requestedPreviewFile: null,
   };
   const toolCalls: ToolCallInfo[] = [];
 
-  // First message in session → auto-run Art Director
-  const isFirstMessage = history.length === 0;
-  let designBrief = "";
-  if (isFirstMessage) {
-    try {
-      console.log("[art-director] auto-running for first message");
-      designBrief = await runArtDirector(message, workspacePath, model);
-      console.log(`[art-director] brief generated (${designBrief.length} chars)`);
-    } catch (err) {
-      console.error("[art-director] failed, proceeding without brief:", err);
-    }
-  }
-
   const { agent, resolved, skillsUsed } = await buildAgent(
-    message, workspacePath, model, toolCtx, designBrief || undefined
+    message, workspacePath, model, toolCtx
   );
   const messages = buildMessages(history, message);
 
@@ -473,17 +311,12 @@ export async function runAgent(
     files_changed: toolCtx.filesChanged,
     tool_calls: toolCalls,
     skills_used: skillsUsed,
-    ...(designBrief ? { design_brief: designBrief } : {}),
-    ...(toolCtx.requestedPreviewFile ? { preview_file: toolCtx.requestedPreviewFile } : {}),
   };
 }
 
 // ---------- SSE event types ----------
 
 export type SSEEvent =
-  | { type: "art_director_start"; data: Record<string, never> }
-  | { type: "design_brief"; data: { brief: string } }
-  | { type: "set_preview"; data: { path: string } }
   | { type: "skills"; data: { skills: string[] } }
   | { type: "reasoning_start"; data: Record<string, never> }
   | { type: "reasoning"; data: { text: string } }
@@ -495,43 +328,22 @@ export type SSEEvent =
 
 // ---------- Streaming runner (for /api/chat/stream) ----------
 
-const STREAM_TIMEOUT_MS = 180_000; // 3 min overall timeout
+const STREAM_TIMEOUT_MS = 180_000;
 
 export async function* streamAgent(
   message: string,
   history: HistoryMessage[],
   workspacePath: string,
-  model: string | null,
-  currentPreviewFile?: string | null
+  model: string | null
 ): AsyncGenerator<SSEEvent> {
   const toolCtx: ToolContext = {
     workspacePath,
     filesChanged: [],
-    model,
-    currentPreviewFile: currentPreviewFile ?? null,
-    requestedPreviewFile: null,
   };
   const toolCalls: ToolCallInfo[] = [];
 
-  // First message in session → auto-run Art Director
-  const isFirstMessage = history.length === 0;
-  let designBrief = "";
-  if (isFirstMessage) {
-    yield { type: "art_director_start", data: {} };
-    try {
-      console.log("[art-director] auto-running for first message (stream)");
-      designBrief = await runArtDirector(message, workspacePath, model);
-      console.log(`[art-director] brief generated (${designBrief.length} chars)`);
-      if (designBrief) {
-        yield { type: "design_brief", data: { brief: designBrief } };
-      }
-    } catch (err) {
-      console.error("[art-director] failed, proceeding without brief:", err);
-    }
-  }
-
   const { agent, resolved, skillsUsed } = await buildAgent(
-    message, workspacePath, model, toolCtx, designBrief || undefined
+    message, workspacePath, model, toolCtx
   );
 
   if (skillsUsed.length > 0) {
@@ -562,7 +374,6 @@ export async function* streamAgent(
 
   try {
     for await (const chunk of stream.fullStream) {
-      // Timeout guard
       if (Date.now() - startTime > STREAM_TIMEOUT_MS) {
         console.warn(`[stream] timeout after ${Math.round((Date.now() - startTime) / 1000)}s`);
         break;
@@ -605,9 +416,6 @@ export async function* streamAgent(
           const name = (payload.toolName as string) ?? currentToolName;
           toolCalls.push({ name, args: {}, result: truncated });
           yield { type: "tool_result", data: { name, result: truncated } };
-          if (name === "set_preview" && toolCtx.requestedPreviewFile) {
-            yield { type: "set_preview", data: { path: toolCtx.requestedPreviewFile } };
-          }
           break;
         }
         case "step-start": {
@@ -622,7 +430,6 @@ export async function* streamAgent(
     }
   } catch (err) {
     console.error("[stream] fullStream error:", err);
-    // If we have partial text, still return it
     if (!fullText) {
       fullText = `Error during streaming: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -642,8 +449,6 @@ export async function* streamAgent(
       files_changed: toolCtx.filesChanged,
       tool_calls: toolCalls,
       skills_used: skillsUsed,
-      ...(designBrief ? { design_brief: designBrief } : {}),
-      ...(toolCtx.requestedPreviewFile ? { preview_file: toolCtx.requestedPreviewFile } : {}),
     },
   };
 

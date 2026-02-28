@@ -12,7 +12,7 @@ const TIMEOUT_MS = 30_000;
 
 export async function executePythonCode(code: string): Promise<string> {
   const dir = tmpdir();
-  const scriptPath = path.join(dir, `chatooli_sandbox_${Date.now()}_${Math.random().toString(36).slice(2)}.py`);
+  const scriptPath = path.join(dir, `agent_sandbox_${Date.now()}_${Math.random().toString(36).slice(2)}.py`);
   try {
     await fs.writeFile(scriptPath, code, "utf-8");
     const result = execSync(`python3 "${scriptPath}"`, {

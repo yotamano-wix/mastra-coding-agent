@@ -51,7 +51,7 @@ function parseSkillMd(raw: string): Omit<Skill, "references"> {
 
 /**
  * Stem a word by removing common English suffixes.
- * Simple but effective for matching creative-coding terms.
+ * Simple but effective for matching domain-specific terms.
  */
 function stem(word: string): string {
   return word
@@ -158,8 +158,8 @@ export function formatSkillsIndex(skills: Skill[]): string {
   return [
     "## Available Skills",
     "",
-    "You have specialized creative-coding skills. When the user's request matches",
-    "a skill description below, follow that skill's patterns, examples, and quality checklist.",
+    "You have specialized skills. When the user's request matches a skill description below,",
+    "follow that skill's patterns, examples, and quality checklist.",
     "The relevant skill instructions will be provided in your context automatically.",
     "",
     ...entries,

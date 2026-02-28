@@ -1,5 +1,5 @@
 /**
- * Hono server for Chatooli — Mastra-powered AI agent with tools and skills.
+ * Hono server for Mastra-powered coding agent with tools and skills.
  */
 
 import dotenv from "dotenv";
@@ -22,53 +22,23 @@ if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
   process.env.GOOGLE_GENERATIVE_AI_API_KEY = process.env.GEMINI_API_KEY;
 }
 
-const DEFAULT_WORKSPACE = process.env.CHATOOLI_WORKSPACE ?? path.join(PROJECT_ROOT, "workspace");
+const DEFAULT_WORKSPACE = process.env.AGENT_WORKSPACE ?? path.join(PROJECT_ROOT, "workspace");
 const FRONTEND_DIR = path.join(PROJECT_ROOT, "frontend");
 
 // ---------- Helpers ----------
 
 const MIME_BY_EXT: Record<string, string> = {
-  ".glsl": "text/plain", ".frag": "text/plain", ".vert": "text/plain",
-  ".wgsl": "text/plain", ".obj": "text/plain", ".mtl": "text/plain",
   ".html": "text/html", ".htm": "text/html",
   ".js": "application/javascript", ".css": "text/css", ".json": "application/json",
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
   ".gif": "image/gif", ".svg": "image/svg+xml", ".ico": "image/x-icon",
   ".woff": "font/woff", ".woff2": "font/woff2",
+  ".txt": "text/plain", ".md": "text/plain",
+  ".py": "text/plain", ".ts": "text/plain", ".tsx": "text/plain",
 };
 
 function getMimeType(filePath: string): string {
   return MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? "application/octet-stream";
-}
-
-/** If agent returned HTML in a code block but wrote no files, auto-save to workspace. */
-async function autoSaveHtml(
-  codeBlocks: { language: string; code: string }[],
-  filesChanged: string[],
-  workspacePath: string
-): Promise<string[]> {
-  if (filesChanged.length > 0) return filesChanged;
-  for (const block of codeBlocks) {
-    const code = block.code ?? "";
-    if (code.includes("<!DOCTYPE") || code.includes("<html")) {
-      const titleMatch = code.match(/<title>([^<]*)<\/title>/i);
-      let name = "sketch.html";
-      if (titleMatch) {
-        const slug = titleMatch[1].trim().toLowerCase()
-          .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
-        if (slug) name = `${slug}.html`;
-      }
-      try {
-        const full = path.resolve(workspacePath, name);
-        if (!full.startsWith(path.resolve(workspacePath))) continue;
-        await fs.mkdir(path.dirname(full), { recursive: true });
-        await fs.writeFile(full, code, "utf-8");
-        return [name];
-      } catch { /* ignore */ }
-      break;
-    }
-  }
-  return filesChanged;
 }
 
 // ---------- Shared chat handler ----------
@@ -78,7 +48,6 @@ interface ChatBody {
   session_id?: string | null;
   model?: string | null;
   workspace_path?: string | null;
-  preview_file?: string | null;
 }
 
 interface ChatResult {
@@ -97,14 +66,13 @@ async function handleChat(body: ChatBody): Promise<ChatResult> {
   const history = sessions.getSession(sessionId).slice(0, -1);
 
   try {
-    const response = await runAgent(body.message, history, workspacePath, body.model ?? null, body.preview_file);
-    const filesChanged = await autoSaveHtml(response.code_blocks, response.files_changed, workspacePath);
+    const response = await runAgent(body.message, history, workspacePath, body.model ?? null);
     sessions.appendToSession(sessionId, "assistant", response.text);
     return {
       session_id: sessionId,
       response: response.text,
       code_blocks: response.code_blocks,
-      files_changed: filesChanged,
+      files_changed: response.files_changed,
       tool_calls: response.tool_calls,
       skills_used: response.skills_used,
     };
@@ -214,14 +182,10 @@ app.post("/api/chat/stream", async (c) => {
 
     try {
       for await (const event of streamAgent(
-        body.message, history, workspacePath, body.model ?? null, body.preview_file
+        body.message, history, workspacePath, body.model ?? null
       )) {
         if (event.type === "response") {
           const resp = event.data;
-          const filesChanged = await autoSaveHtml(
-            resp.code_blocks, resp.files_changed, workspacePath
-          );
-          resp.files_changed = filesChanged;
           resp.session_id = sessionId;
           sessions.appendToSession(sessionId, "assistant", resp.text);
           await send("response", resp);
@@ -256,5 +220,5 @@ app.delete("/api/sessions/:sessionId", (c) => {
 
 // Start
 const PORT = Number(process.env.PORT) || 3000;
-console.log(`Chatooli (Mastra) running at http://localhost:${PORT}`);
+console.log(`Coding Agent (Mastra) running at http://localhost:${PORT}`);
 serve({ fetch: app.fetch, port: PORT });

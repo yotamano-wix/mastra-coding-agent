@@ -2,12 +2,10 @@
  * Prompt loader — reads prompt markdown files from src/prompts/ and
  * composes them with skill context.
  *
- * Each agent's system prompt lives in its own .md file for easy editing:
- *   - prompts/coding-agent.md  — the main creative coding agent
- *   - prompts/art-director.md  — the Art Director (design brief agent)
+ * The agent's system prompt lives in prompts/coding-agent.md for easy editing.
  *
  * Skill progressive disclosure is layered on top:
- *   Level 1 (frontmatter index) — always appended to coding agent prompt
+ *   Level 1 (frontmatter index) — always appended to the system prompt
  *   Level 2+3 (body + refs)     — injected per-request by mastra-engine.ts
  */
 
@@ -36,7 +34,6 @@ function loadPromptFile(filename: string): string {
 
 let _cachedSkills: Skill[] | null = null;
 let _cachedSystemPrompt: string | null = null;
-let _cachedArtDirectorPrompt: string | null = null;
 
 /** Load skills from disk (cached after first call). */
 async function getSkills(): Promise<Skill[]> {
@@ -79,14 +76,4 @@ export async function getMatchedSkills(
     names: matched.map((s) => s.name),
     context: formatMatchedSkills(matched),
   };
-}
-
-/**
- * Get the Art Director's system prompt.
- * Loads from prompts/art-director.md (no skill injection — it doesn't code).
- */
-export function getArtDirectorPrompt(): string {
-  if (_cachedArtDirectorPrompt) return _cachedArtDirectorPrompt;
-  _cachedArtDirectorPrompt = loadPromptFile("art-director.md");
-  return _cachedArtDirectorPrompt;
 }

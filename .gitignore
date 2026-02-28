@@ -6,6 +6,10 @@ node_modules/
 backend-ts/node_modules/
 backend-ts/dist/
 
+# Workspace output (keep .gitkeep)
+workspace/*
+!workspace/.gitkeep
+
 # IDE
 .vscode/
 .idea/

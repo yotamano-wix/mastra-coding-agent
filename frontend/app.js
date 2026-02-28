@@ -1,5 +1,5 @@
 // ============================================
-// Chatooli — Frontend Application
+// Coding Agent — Frontend Application
 // ============================================
 
 const API_BASE = '';
@@ -65,31 +65,24 @@ async function sendMessage() {
     isLoading = true;
     sendBtn.disabled = true;
 
-    // Remove welcome message
     const welcome = chatMessages.querySelector('.welcome-message');
     if (welcome) welcome.remove();
 
-    // Add user message
     appendMessage('user', message);
 
-    // Clear input
     chatInput.value = '';
     chatInput.style.height = 'auto';
 
-    // Create collapsible thinking block
     createThinkingBlock();
 
     try {
-        // Use SSE streaming endpoint
         const response = await fetch(`${API_BASE}/api/chat/stream`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 message,
                 session_id: sessionId,
-                engine: 'mastra',
                 model: modelSelect.value || undefined,
-                preview_file: lastWorkspaceEntry || undefined,
             }),
         });
 
@@ -97,7 +90,6 @@ async function sendMessage() {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        // Read SSE stream
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
@@ -124,7 +116,6 @@ async function sendMessage() {
             }
         }
 
-        // Capture streaming element before finishThinkingBlock resets it
         const streamedEl = streamingResponseEl;
         finishThinkingBlock();
 
@@ -137,13 +128,12 @@ async function sendMessage() {
             } else {
                 appendMessage('agent', responseText);
             }
-            updateSandbox(responseText, finalResponse.code_blocks, finalResponse.files_changed, finalResponse.preview_file);
+            updateSandbox(responseText, finalResponse.code_blocks, finalResponse.files_changed);
         }
 
     } catch (err) {
         finishThinkingBlock();
 
-        // Fallback to non-streaming endpoint
         try {
             createThinkingBlock();
             const resp = await fetch(`${API_BASE}/api/chat`, {
@@ -152,9 +142,7 @@ async function sendMessage() {
                 body: JSON.stringify({
                     message,
                     session_id: sessionId,
-                    engine: 'mastra',
                     model: modelSelect.value || undefined,
-                    preview_file: lastWorkspaceEntry || undefined,
                 }),
             });
             const data = await resp.json();
@@ -177,13 +165,7 @@ async function sendMessage() {
 }
 
 function handleSSEEvent(type, data) {
-    if (type === 'art_director_start') {
-        appendArtDirectorStart();
-    } else if (type === 'design_brief') {
-        appendDesignBrief(data.brief);
-    } else if (type === 'set_preview') {
-        applyPreviewFile(data.path);
-    } else if (type === 'skills') {
+    if (type === 'skills') {
         appendSkillsBadges(data.skills);
     } else if (type === 'reasoning_start') {
         onReasoningStart();
@@ -223,77 +205,6 @@ function appendSkillsBadges(skills) {
     scrollToBottom();
 }
 
-let artDirectorDiv = null;
-
-function appendArtDirectorStart() {
-    const div = document.createElement('div');
-    div.className = 'message message-art-director';
-
-    const paintIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>';
-
-    div.innerHTML = `
-        <div class="art-director-header">
-            ${paintIcon}
-            <span class="art-director-label">Art Director is reviewing...</span>
-            <span class="art-director-spinner"></span>
-        </div>
-        <div class="art-director-body"></div>
-    `;
-
-    const target = activeThinkingBlock
-        ? activeThinkingBlock.querySelector('.thinking-body')
-        : chatMessages;
-    target.appendChild(div);
-    artDirectorDiv = div;
-    scrollToBottom();
-}
-
-function appendDesignBrief(brief) {
-    if (!brief) return;
-
-    if (artDirectorDiv) {
-        artDirectorDiv.querySelector('.art-director-label').textContent = 'Art Director';
-        const spinner = artDirectorDiv.querySelector('.art-director-spinner');
-        if (spinner) spinner.remove();
-
-        const body = artDirectorDiv.querySelector('.art-director-body');
-        body.innerHTML = formatMessage(brief);
-        artDirectorDiv.classList.add('has-brief');
-
-        const header = artDirectorDiv.querySelector('.art-director-header');
-        header.style.cursor = 'pointer';
-        header.addEventListener('click', () => {
-            artDirectorDiv.classList.toggle('collapsed');
-        });
-
-        artDirectorDiv = null;
-    } else {
-        const div = document.createElement('div');
-        div.className = 'message message-art-director has-brief';
-
-        const paintIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>';
-
-        div.innerHTML = `
-            <div class="art-director-header" style="cursor:pointer">
-                ${paintIcon}
-                <span class="art-director-label">Art Director</span>
-            </div>
-            <div class="art-director-body">${formatMessage(brief)}</div>
-        `;
-
-        div.querySelector('.art-director-header').addEventListener('click', () => {
-            div.classList.toggle('collapsed');
-        });
-
-        const target = activeThinkingBlock
-            ? activeThinkingBlock.querySelector('.thinking-body')
-            : chatMessages;
-        target.appendChild(div);
-    }
-
-    scrollToBottom();
-}
-
 function toolArgsLabel(name, args) {
     if (!args) return '';
     if (['write_file', 'read_file', 'edit_file'].includes(name)) return args.path || '';
@@ -301,9 +212,6 @@ function toolArgsLabel(name, args) {
     if (name === 'glob_files') return args.pattern || '';
     if (name === 'grep_files') return args.pattern || '';
     if (name === 'execute_python_code') return '(code)';
-    if (name === 'consult_art_director') return args.request ? args.request.slice(0, 60) + (args.request.length > 60 ? '...' : '') : '';
-    if (name === 'set_preview') return args.path || '';
-    if (name === 'get_preview_status') return '';
     return JSON.stringify(args);
 }
 
@@ -356,7 +264,7 @@ function appendTextDelta(text) {
         div.innerHTML = `
             <div class="message-avatar">AI</div>
             <div class="message-content">
-                <div class="message-role">Chatooli</div>
+                <div class="message-role">Agent</div>
                 <div class="message-text streaming"></div>
             </div>
         `;
@@ -373,9 +281,6 @@ function getToolIcon(name) {
         case 'read_file': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
         case 'edit_file': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
         case 'list_files': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
-        case 'consult_art_director': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>';
-        case 'set_preview': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
-        case 'get_preview_status': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
         default: return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg>';
     }
 }
@@ -386,7 +291,7 @@ function appendMessage(role, content) {
     div.className = `message message-${role}`;
 
     const avatarText = role === 'user' ? 'U' : 'AI';
-    const roleText = role === 'user' ? 'You' : 'Chatooli';
+    const roleText = role === 'user' ? 'You' : 'Agent';
 
     div.innerHTML = `
         <div class="message-avatar">${avatarText}</div>
@@ -514,7 +419,7 @@ function scrollToBottom() {
 
 // ---- Sandbox ----
 
-function updateSandbox(rawResponse, codeBlocks, filesChanged, previewFile) {
+function updateSandbox(rawResponse, codeBlocks, filesChanged) {
     lastCodeBlocks = codeBlocks || [];
     filesChanged = filesChanged || [];
 
@@ -526,9 +431,7 @@ function updateSandbox(rawResponse, codeBlocks, filesChanged, previewFile) {
         sandboxTabs.style.display = 'flex';
     }
 
-    if (previewFile) {
-        lastWorkspaceEntry = previewFile;
-    } else if (filesChanged.length > 0) {
+    if (filesChanged.length > 0) {
         const htmlFile = filesChanged.find(f =>
             f.endsWith('.html') || f.endsWith('.htm')
         );
@@ -686,12 +589,6 @@ function previewWorkspaceFile(path) {
     showPreview();
 }
 
-function applyPreviewFile(filePath) {
-    if (!filePath) return;
-    lastWorkspaceEntry = filePath;
-    sandboxTabs.style.display = 'flex';
-    showPreview(true);
-}
 refreshFilesBtn.addEventListener('click', loadWorkspaceFiles);
 
 // ---- Copy Code ----
@@ -744,13 +641,13 @@ clearBtn.addEventListener('click', async () => {
                     <path d="M2 12l10 5 10-5"/>
                 </svg>
             </div>
-            <h2>Welcome to Chatooli</h2>
-            <p>Describe a visual idea and I'll generate it as a live, interactive sketch. Try:</p>
+            <h2>Coding Agent</h2>
+            <p>Describe what you'd like to build and I'll write the code. Try:</p>
             <div class="suggestions">
-                <button class="suggestion" onclick="useSuggestion(this)">Create a particle system that follows the mouse with rainbow trails</button>
-                <button class="suggestion" onclick="useSuggestion(this)">Build a rotating 3D wireframe icosahedron with Three.js</button>
-                <button class="suggestion" onclick="useSuggestion(this)">Make a fullscreen GLSL shader with animated plasma waves</button>
-                <button class="suggestion" onclick="useSuggestion(this)">Generate an SVG animation with text orbiting along a curved path</button>
+                <button class="suggestion" onclick="useSuggestion(this)">Create a Python script that reads a CSV and generates a summary report</button>
+                <button class="suggestion" onclick="useSuggestion(this)">Build a REST API with Express.js and basic CRUD endpoints</button>
+                <button class="suggestion" onclick="useSuggestion(this)">Write a React component for a searchable data table</button>
+                <button class="suggestion" onclick="useSuggestion(this)">Create an HTML dashboard with charts using Chart.js</button>
             </div>
         </div>
     `;
@@ -761,7 +658,7 @@ clearBtn.addEventListener('click', async () => {
                 <polyline points="16 18 22 12 16 6"/>
                 <polyline points="8 6 2 12 8 18"/>
             </svg>
-            <p>Output will appear here when the agent generates code.</p>
+            <p>Output will appear here when the agent writes code.</p>
         </div>
     `;
     sandboxPreview.style.display = 'none';

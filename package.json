@@ -1,5 +1,5 @@
 {
-  "name": "chatooli-root",
+  "name": "mastra-coding-agent",
   "private": true,
   "scripts": {
     "dev": "npm run dev --prefix backend-ts",

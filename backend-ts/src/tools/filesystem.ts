@@ -5,7 +5,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-const WORKSPACE_ROOT = process.env.CHATOOLI_WORKSPACE || path.resolve(process.cwd(), "workspace");
+const WORKSPACE_ROOT = process.env.AGENT_WORKSPACE || path.resolve(process.cwd(), "workspace");
 
 function resolvePath(relativePath: string, root: string): string {
   const rootResolved = path.resolve(root);

@@ -1,6 +1,6 @@
 {
-  "name": "chatooli",
-  "version": "2.1.0",
+  "name": "mastra-coding-agent",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
