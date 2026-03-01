@@ -22,7 +22,7 @@ import { createMergePageEmlTool } from "./tools/merge-page.js";
 import fsSync from "node:fs";
 import nodePath from "node:path";
 
-const DEFAULT_MODEL = "openai/gpt-4o";
+const DEFAULT_MODEL = "google/gemini-3-flash";
 const MAX_STEPS = 50;
 
 // ---------- Types ----------
@@ -301,7 +301,7 @@ const agentMemory = new Memory({
   options: {
     lastMessages: 40,
     observationalMemory: {
-      model: "google/gemini-2.5-flash",
+      model: "google/gemini-3-flash",
       scope: "resource",
       observation: { messageTokens: 20_000 },
       reflection: { observationTokens: 60_000 },
