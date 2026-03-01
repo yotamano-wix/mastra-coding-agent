@@ -212,6 +212,11 @@ function toolArgsLabel(name, args) {
     if (name === 'glob_files') return args.pattern || '';
     if (name === 'grep_files') return args.pattern || '';
     if (name === 'execute_python_code') return '(code)';
+    if (name === 'manage_tasks') {
+        if (args.action === 'init' && args.phase) return `${args.action} ${args.phase}`;
+        if (args.action === 'complete' && args.task_id) return `${args.action} ${args.task_id}`;
+        return args.action || '';
+    }
     return JSON.stringify(args);
 }
 
@@ -246,6 +251,17 @@ function appendToolCall(tc) {
 }
 
 function appendToolResult(data) {
+    if (data.name === 'manage_tasks' && data.result) {
+        try {
+            const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
+            if (parsed && Array.isArray(parsed.tasks) && parsed.tasks.length > 0) {
+                upsertTaskListInChat(parsed);
+                scrollToBottom();
+                return;
+            }
+        } catch (_) { /* not JSON, fall through to default */ }
+    }
+
     if (lastToolCallDiv && lastToolCallDiv.dataset.toolName === data.name) {
         const content = lastToolCallDiv.querySelector('.tool-call-content');
         if (content && !content.querySelector('.tool-result') && data.result) {
@@ -254,6 +270,43 @@ function appendToolResult(data) {
             resultDiv.textContent = data.result.slice(0, 200) + (data.result.length > 200 ? '...' : '');
             content.appendChild(resultDiv);
         }
+    }
+}
+
+let agentTaskListEl = null;
+
+function upsertTaskListInChat(payload) {
+    const container = activeThinkingBlock ? activeThinkingBlock.querySelector('.thinking-body') : chatMessages;
+    if (!container) return;
+
+    if (!agentTaskListEl || !container.contains(agentTaskListEl)) {
+        agentTaskListEl = document.createElement('div');
+        agentTaskListEl.className = 'agent-task-list';
+        container.appendChild(agentTaskListEl);
+    }
+
+    const tasks = payload.tasks || [];
+    const progress = payload.progress || '0/' + tasks.length;
+    const firstPendingIndex = tasks.findIndex(t => t.status === 'pending');
+
+    const header = `<div class="task-list-header">To-dos ${tasks.length}</div>`;
+    const items = tasks.map((t, i) => {
+        const isDone = t.status === 'done';
+        const isCurrent = !isDone && i === firstPendingIndex;
+        let icon = '<span class="task-icon task-icon-pending">○</span>';
+        if (isDone) icon = '<span class="task-icon task-icon-done">✓</span>';
+        else if (isCurrent) icon = '<span class="task-icon task-icon-current">→</span>';
+        const desc = escapeHtml(t.description);
+        const rowClass = ['task-item', isDone ? 'done' : '', isCurrent ? 'current' : '', !isDone && !isCurrent ? 'pending' : ''].filter(Boolean).join(' ');
+        return `<div class="${rowClass}" data-task-id="${escapeHtml(t.id)}">${icon}<span class="task-desc">${desc}</span></div>`;
+    }).join('');
+
+    agentTaskListEl.innerHTML = header + '<div class="task-list-items">' + items + '</div>';
+    if (payload.message) {
+        const msg = document.createElement('div');
+        msg.className = 'task-list-message';
+        msg.textContent = payload.message;
+        agentTaskListEl.appendChild(msg);
     }
 }
 
@@ -281,6 +334,7 @@ function getToolIcon(name) {
         case 'read_file': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
         case 'edit_file': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
         case 'list_files': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>';
+        case 'manage_tasks': return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>';
         default: return '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/></svg>';
     }
 }
@@ -355,6 +409,7 @@ function createThinkingBlock() {
 
     thinkingStartTime = Date.now();
     activeThinkingBlock = block;
+    agentTaskListEl = null;
     reasoningTextEl = null;
     hasReasoning = false;
     streamingResponseEl = null;
@@ -631,6 +686,9 @@ clearBtn.addEventListener('click', async () => {
     lastToolCallDiv = null;
     if (thinkingTimerInterval) clearInterval(thinkingTimerInterval);
     thinkingTimerInterval = null;
+    isLoading = false;
+    sendBtn.disabled = false;
+    agentTaskListEl = null;
 
     chatMessages.innerHTML = `
         <div class="welcome-message">

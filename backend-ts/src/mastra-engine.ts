@@ -4,6 +4,8 @@
  */
 
 import { Agent } from "@mastra/core/agent";
+import { Memory } from "@mastra/memory";
+import { LibSQLStore } from "@mastra/libsql";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { getSystemPrompt, getMatchedSkills } from "./prompts.js";
@@ -11,9 +13,17 @@ import { type HistoryMessage } from "./sessions.js";
 import * as fs from "./tools/filesystem.js";
 import { executePythonCode } from "./tools/sandbox.js";
 import { extractCodeBlocks } from "./utils.js";
+import { createQueryTypePresetsTool } from "./tools/type-presets.js";
+import { createQueryComponentSchemaTool } from "./tools/component-schemas.js";
+import { createValidateEmlTool } from "./tools/eml-validator.js";
+import { createManageTasksTool } from "./tools/task-manager.js";
+import { createSaveBrandThemeTool } from "./tools/brand-theme.js";
+import { createMergePageEmlTool } from "./tools/merge-page.js";
+import fsSync from "node:fs";
+import nodePath from "node:path";
 
 const DEFAULT_MODEL = "openai/gpt-4o";
-const MAX_STEPS = 20;
+const MAX_STEPS = 50;
 
 // ---------- Types ----------
 
@@ -86,6 +96,17 @@ function resolveModel(modelId: string | null): ResolvedModel {
 interface ToolContext {
   workspacePath: string;
   filesChanged: string[];
+}
+
+function createSiteCreationTools(workspacePath: string) {
+  return {
+    query_type_presets: createQueryTypePresetsTool(workspacePath),
+    query_component_schema: createQueryComponentSchemaTool(workspacePath),
+    validate_eml: createValidateEmlTool(workspacePath),
+    manage_tasks: createManageTasksTool(workspacePath),
+    save_brand_theme: createSaveBrandThemeTool(workspacePath),
+    merge_page_eml: createMergePageEmlTool(workspacePath),
+  };
 }
 
 function createMastraTools(ctx: ToolContext) {
@@ -214,6 +235,50 @@ function createMastraTools(ctx: ToolContext) {
   };
 }
 
+// ---------- Phase 2 context injection ----------
+
+const PHASE2_KEYWORDS = ["approve","approved","looks good","go ahead","generate","build","start building","create the","write the","generate the","eml","sections","continue","remaining"];
+
+function detectPhase2(workspacePath: string, msg: string): boolean {
+  const planPath = nodePath.join(workspacePath, "plan.md");
+  if (!fsSync.existsSync(planPath)) return false;
+  const lower = msg.toLowerCase().trim();
+  return PHASE2_KEYWORDS.some((k) => lower.includes(k));
+}
+
+function injectPhase2Context(workspacePath: string, msg: string): string {
+  const planPath = nodePath.join(workspacePath, "plan.md");
+  if (!fsSync.existsSync(planPath)) return msg;
+  const plan = fsSync.readFileSync(planPath, "utf-8");
+
+  const tasksPath = nodePath.join(workspacePath, ".agent-tasks.json");
+  const isResume = fsSync.existsSync(tasksPath);
+  let tasksSummary = "";
+  let resumeInstructions = "";
+
+  if (isResume) {
+    try {
+      const tasksData = JSON.parse(fsSync.readFileSync(tasksPath, "utf-8"));
+      const tasks = tasksData.tasks || [];
+      const done = tasks.filter((t: { status: string }) => t.status === "done").length;
+      const total = tasks.length;
+      const nextPending = tasks.find((t: { status: string }) => t.status !== "done");
+      tasksSummary = `\n\n## Current Progress: ${done}/${total} tasks complete`;
+      if (nextPending) {
+        tasksSummary += `\nNext pending task: ${nextPending.id} — ${nextPending.description}`;
+        if (nextPending.required_tool) tasksSummary += ` (use ${nextPending.required_tool})`;
+      }
+      resumeInstructions = `Tasks are already initialized. Do NOT call manage_tasks(init, build) again.\nCall manage_tasks(status) first to see current progress, then CONTINUE from the next pending task.`;
+    } catch { /* ignore parse errors, fall through to fresh start */ }
+  }
+
+  if (!resumeInstructions) {
+    resumeInstructions = `Call manage_tasks(init, build) first. Your FIRST task is to generate the brand theme: read plan.md design specs, then call save_brand_theme with all wst-* variables.\nAfter brand theme is saved, work through section tasks: query_component_schema → write_file → validate_eml → edit_file for each section.`;
+  }
+
+  return `[Phase 2 — Build Mode]\nFollow plan.md exactly. Do NOT regenerate the plan.\n${resumeInstructions}\n\n## plan.md\n${plan}${tasksSummary}\n\nUser: ${msg}`;
+}
+
 // ---------- Shared setup ----------
 
 function buildMessages(
@@ -228,13 +293,31 @@ function buildMessages(
   return messages;
 }
 
+const agentMemory = new Memory({
+  storage: new LibSQLStore({
+    id: "site-creation-memory",
+    url: "file:../../memory.db",
+  }),
+  options: {
+    lastMessages: 40,
+    observationalMemory: {
+      model: "google/gemini-2.5-flash",
+      scope: "resource",
+      observation: { messageTokens: 20_000 },
+      reflection: { observationTokens: 60_000 },
+    },
+  },
+});
+
 async function buildAgent(
   message: string,
   workspacePath: string,
   model: string | null,
   toolCtx: ToolContext
 ) {
-  const tools = createMastraTools(toolCtx);
+  const fsTools = createMastraTools(toolCtx);
+  const siteTools = createSiteCreationTools(workspacePath);
+  const tools = { ...fsTools, ...siteTools };
   const resolved = resolveModel(model);
   const systemPrompt = await getSystemPrompt();
   const { names: skillsUsed, context: skillContext } = await getMatchedSkills(message);
@@ -244,11 +327,12 @@ async function buildAgent(
   const fullInstructions = parts.join("\n\n");
 
   const agent = new Agent({
-    id: "coding-agent",
-    name: "Coding Agent",
+    id: "site-creation-agent",
+    name: "Site Creation Agent",
     instructions: fullInstructions,
     model: resolved.modelId,
     tools,
+    memory: agentMemory,
   });
 
   return { agent, resolved, skillsUsed };
@@ -268,10 +352,12 @@ export async function runAgent(
   };
   const toolCalls: ToolCallInfo[] = [];
 
+  const enrichedMessage = detectPhase2(workspacePath, message) ? injectPhase2Context(workspacePath, message) : message;
+
   const { agent, resolved, skillsUsed } = await buildAgent(
-    message, workspacePath, model, toolCtx
+    enrichedMessage, workspacePath, model, toolCtx
   );
-  const messages = buildMessages(history, message);
+  const messages = buildMessages(history, enrichedMessage);
 
   const result = await agent.generate(messages as Parameters<Agent["generate"]>[0], {
     maxSteps: MAX_STEPS,
@@ -342,15 +428,17 @@ export async function* streamAgent(
   };
   const toolCalls: ToolCallInfo[] = [];
 
+  const enrichedMessage = detectPhase2(workspacePath, message) ? injectPhase2Context(workspacePath, message) : message;
+
   const { agent, resolved, skillsUsed } = await buildAgent(
-    message, workspacePath, model, toolCtx
+    enrichedMessage, workspacePath, model, toolCtx
   );
 
   if (skillsUsed.length > 0) {
     yield { type: "skills", data: { skills: skillsUsed } };
   }
 
-  const messages = buildMessages(history, message);
+  const messages = buildMessages(history, enrichedMessage);
   let stepCount = 0;
 
   const stream = await agent.stream(messages as Parameters<Agent["stream"]>[0], {
@@ -412,10 +500,11 @@ export async function* streamAgent(
           const resultStr = typeof resultVal === "string"
             ? resultVal
             : resultVal != null ? JSON.stringify(resultVal) : "";
-          const truncated = resultStr.length > 500 ? resultStr.slice(0, 500) + "..." : resultStr;
           const name = (payload.toolName as string) ?? currentToolName;
+          const truncated = resultStr.length > 500 ? resultStr.slice(0, 500) + "..." : resultStr;
           toolCalls.push({ name, args: {}, result: truncated });
-          yield { type: "tool_result", data: { name, result: truncated } };
+          const forFrontend = name === "manage_tasks" ? resultStr : truncated;
+          yield { type: "tool_result", data: { name, result: forFrontend } };
           break;
         }
         case "step-start": {

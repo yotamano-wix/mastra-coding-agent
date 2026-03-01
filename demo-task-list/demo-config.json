@@ -1,0 +1,6 @@
+{
+  "name": "demo-task-list",
+  "version": "1.0.0",
+  "description": "Example config created by Cursor task list",
+  "tasksCompleted": ["create-folder", "add-readme", "add-config"]
+}

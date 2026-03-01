@@ -951,6 +951,76 @@ body {
     flex-shrink: 0;
 }
 
+/* -- Task list (Cursor-style To-dos in chat) -- */
+.agent-task-list {
+    margin: 8px 0;
+    padding: 12px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+.task-list-header {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.task-list-items {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.task-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    color: var(--text-secondary);
+}
+
+.task-item .task-icon {
+    flex-shrink: 0;
+    width: 18px;
+    text-align: center;
+    font-size: 12px;
+}
+
+.task-item .task-icon-done {
+    color: var(--success, #22c55e);
+}
+
+.task-item .task-icon-current {
+    color: var(--accent);
+    font-weight: bold;
+}
+
+.task-item .task-icon-pending {
+    color: var(--text-tertiary);
+    opacity: 0.8;
+}
+
+.task-item.done .task-desc {
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.task-item.current .task-desc {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.task-list-message {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
 /* -- Utility -- */
 .hidden {
     display: none !important;
